@@ -12,6 +12,8 @@ import requests
 import json
 import re
 from memcache import Client
+import numpy
+import snowboydecoder
 
 #Settings
 button = 18 #GPIO Pin with button connected
@@ -106,28 +108,83 @@ def alexa():
 			GPIO.output(lights[1], GPIO.LOW)
 		
 
+def record():
+    # show debug info on sound amplitudes
+    debug=False
+    
+    # set up alsa audio recording
+    inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL)
+    inp.setchannels(1)
+    inp.setrate(16000)
+    inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+    inp.setperiodsize(500)
+
+    avg = numpy.array([])
+
+    # find average ambient volume
+    for i in range(0, 30):
+        l, data = inp.read()
+        a = numpy.fromstring(data, dtype='int16')
+        mean = numpy.abs(a).mean()
+        avg = numpy.append(avg, mean)
+
+    average = avg.mean()
+    if debug:
+        print "Average: " + str(average)
+
+    # play audio to signify start of recording
+    snowboydecoder.play_audio_file()
+
+    # open new file to write to
+    w = wave.open('recording.wav', 'w')
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(16000)
+
+    count = 0
+    mean = average
+
+    # loop until ~30 samples of a similar "ambient" amplitude
+    while count < 30:
+        l, data = inp.read()
+        a = numpy.fromstring(data, dtype='int16')
+        mean = numpy.abs(a).mean()
+        w.writeframes(data)
+        if mean < average:
+            if debug:
+                print "below: " + str(mean)
+            count = count + 1
+        else:
+            if debug:
+                print "above: " + str(mean)
+            count = count * 0.25
+
+    # cleanup
+    inp = None
+    w.close()
+
+    # play end sound to signify done recording
+    snowboydecoder.play_audio_file(snowboydecoder.DETECT_DONG)
+
+    if debug:
+        print "done! " + str(mean)
+        
+
+def snowboy():
+  record()
+  alexa()
 
 
 def start():
-	last = GPIO.input(button)
+  detector = snowboydecoder.HotwordDetector('resources/alexa.umdl', sensitivity = 0.5)
+  detector.start(detected_callback=snowboy, sleep_time = 0.03)
+
 	while True:
 		val = GPIO.input(button)
 		GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
 		GPIO.output(lights[1], GPIO.HIGH)
-		inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
-		inp.setchannels(1)
-		inp.setrate(16000)
-		inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-		inp.setperiodsize(500)
-		audio = ""
-		while(GPIO.input(button)==0): # we keep recording while the button is pressed
-			l, data = inp.read()
-			if l:
-				audio += data
-		rf = open(path+'recording.wav', 'w')
-		rf.write(audio)
-		rf.close()
-		inp = None
+		
+		record() # same record function between GPIO and snowboy
 		alexa()
 
 	
